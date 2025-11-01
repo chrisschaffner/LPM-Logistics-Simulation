@@ -25,7 +25,7 @@ class RandomMove(SubstepAction):
 
         # Convert to direction vectors
         direction = torch.stack(
-            [torch.cos(angles) * step_size, torch.sin(angles) * step_size],
+            [torch.cos(angles) * 0, torch.sin(angles) * step_size],
             dim=1,
         )
 
