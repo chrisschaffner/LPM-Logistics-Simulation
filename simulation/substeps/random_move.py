@@ -11,26 +11,33 @@ class RandomMove(SubstepAction):
         super().__init__(*args, **kwargs)
 
     def forward(self, state: Dict[str, Any], observations) -> Dict[str, Any]:
-        """Generate random movement directions."""
-        # Get current positions
-        positions = get_var(state, self.input_variables["position"])
-        num_agents = positions.shape[0]
-        device = positions.device  # Get device from positions
+        """
+        Determine the next node (next_hop) for each agent based on current_edge and graph adjacency.
+        """
+        current_edge = get_var(state, self.input_variables["current_edge"])
+        graph = get_var(state, "environment/graph")
+        edge_progress = get_var(state, self.input_variables["edge_progress"])
 
-        # Ensure step_size is on the same device as positions
-        step_size = self.learnable_args["step_size"].to(device)
+        device = current_edge.device
+        num_agents = current_edge.shape[0]
 
-        # Generate random angles - ensure on same device as positions
-        angles = torch.rand(num_agents, device=device) * 2 * torch.pi
+        next_hop = torch.full((num_agents,), -1, dtype=torch.long, device=device)  # shape [num_agents]
 
-        # Convert to direction vectors
-        direction = torch.stack(
-            [torch.cos(angles) * 0, torch.sin(angles) * step_size],
-            dim=1,
-        )
 
-        # Return with exact output variable name from config
-        outputs = {}
-        outputs[self.output_variables[0]] = direction
+        step_size = 0.1 / current_edge[:, 2]
 
+        # Only compute next_hop if edge_progress + step_size >= 1
+        move_mask = (edge_progress.squeeze(1) + step_size) >= 1.0
+        agents_to_move = move_mask.nonzero(as_tuple=False).view(-1)
+
+        for idx in agents_to_move:
+            start_node, target_node, edge_length = current_edge[idx]
+            start_node = int(start_node.item())
+            target_node = int(target_node.item())
+            neighbors = graph[target_node].nonzero(as_tuple=False).flatten()
+            if len(neighbors) == 0:
+                next_hop[idx] = target_node
+            else:
+                next_hop[idx] = neighbors[torch.randint(0, len(neighbors), (1,), device=device)].item()
+        outputs = {self.output_variables[0]: next_hop}
         return outputs
