@@ -5,6 +5,8 @@ from agent_torch.core.registry import Registry
 from agent_torch.core.substep import SubstepTransition
 from agent_torch.core.helpers import get_var
 
+device = "cpu"
+
 
 @Registry.register_substep("update_position", "transition")
 class UpdatePosition(SubstepTransition):
@@ -16,33 +18,43 @@ class UpdatePosition(SubstepTransition):
                 setattr(self, key, value["value"])
 
     def forward(self, state: Dict[str, Any], action) -> Dict[str, Any]:
-        """Update agents moving along graph edges."""
+        """Update agents moving along graph edges (vectorized version)."""
         # Get current edges and edge progress
         current_edge = get_var(state, self.input_variables["current_edge"])  # shape: [num_agents, 3]
         edge_progress = get_var(state, self.input_variables["edge_progress"])  # shape: [num_agents, 1]
         graph = get_var(state, "environment/graph")
-        device = edge_progress.device
 
-        # Use directions from action as step size along edges
-        step_size = 0.01 / current_edge[:, 2].unsqueeze(1)
+        current_edge = current_edge.to(device)
+        edge_progress = edge_progress.to(device)
+        graph = graph.to(device)
+
+        # Ensure current_edge dtype: first two columns int64, third float32
+        current_edge_indices = current_edge[:, :2].long()
+        current_edge_weights = current_edge[:, 2].float()
+
+        # Update progress along edge
+        step_size = 0.01 / current_edge_weights.unsqueeze(1)
         edge_progress = edge_progress + step_size
 
         # Handle agents finishing their edge
-        finished_mask = edge_progress >= 1.0
+        finished_mask = (edge_progress >= 1.0).squeeze()
         if finished_mask.any():
-            finished_agents = finished_mask.nonzero(as_tuple=False).reshape(-1)
             next_hop = action["citizens"]["next_hop"]
-            for idx in finished_agents:
-                nh = next_hop[idx].item()  # scalar
-                if nh >= 0:
-                    start_node, target_node, _ = current_edge[idx]
-                    start_node = int(start_node.item())
-                    target_node = int(target_node.item())
-                    nh = int(nh)
-                    current_edge[idx, 0] = target_node
-                    current_edge[idx, 1] = nh
-                    current_edge[idx, 2] = graph[target_node, nh]
-                    edge_progress[idx] = 0
+            nh = next_hop[finished_mask]
+            valid_mask = nh >= 0
+
+            if valid_mask.any():
+                idx = torch.nonzero(finished_mask).squeeze(1)[valid_mask]
+
+                target_nodes = current_edge_indices[idx, 1]
+                nh_valid = nh[valid_mask].long()
+
+                current_edge_indices[idx, 0] = target_nodes
+                current_edge_indices[idx, 1] = nh_valid
+                current_edge_weights[idx] = graph[target_nodes, nh_valid]
+                edge_progress[idx] = 0.0
+
+        current_edge = torch.cat([current_edge_indices.to(current_edge.dtype), current_edge_weights.unsqueeze(1)], dim=1)
 
         outputs = {
             self.output_variables[0]: current_edge,

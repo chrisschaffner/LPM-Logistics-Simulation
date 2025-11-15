@@ -4,6 +4,8 @@ from agent_torch.core.registry import Registry
 from agent_torch.core.substep import SubstepAction
 from agent_torch.core.helpers import get_var
 
+device = "cpu"
+
 
 @Registry.register_substep("move", "policy")
 class RandomMove(SubstepAction):
@@ -18,11 +20,13 @@ class RandomMove(SubstepAction):
         graph = get_var(state, "environment/graph")
         edge_progress = get_var(state, self.input_variables["edge_progress"])
 
-        device = current_edge.device
+        current_edge = current_edge.to(device)
+        graph = graph.to(device)
+        edge_progress = edge_progress.to(device)
+
         num_agents = current_edge.shape[0]
 
         next_hop = torch.full((num_agents,), -1, dtype=torch.long, device=device)  # shape [num_agents]
-
 
         step_size = 0.1 / current_edge[:, 2]
 
@@ -30,14 +34,14 @@ class RandomMove(SubstepAction):
         move_mask = (edge_progress.squeeze(1) + step_size) >= 1.0
         agents_to_move = move_mask.nonzero(as_tuple=False).view(-1)
 
-        for idx in agents_to_move:
-            start_node, target_node, edge_length = current_edge[idx]
-            start_node = int(start_node.item())
-            target_node = int(target_node.item())
-            neighbors = graph[target_node].nonzero(as_tuple=False).flatten()
-            if len(neighbors) == 0:
-                next_hop[idx] = target_node
-            else:
-                next_hop[idx] = neighbors[torch.randint(0, len(neighbors), (1,), device=device)].item()
+        if agents_to_move.numel() > 0:
+            target_nodes = current_edge[agents_to_move, 1].long()
+            neighbor_mask = graph[target_nodes] > 0
+            probs = neighbor_mask.float() / neighbor_mask.sum(dim=1, keepdim=True).clamp_min(1)
+            sampled_neighbors = torch.multinomial(probs, 1).squeeze(1)
+            no_neighbors = neighbor_mask.sum(dim=1) == 0
+            sampled_neighbors[no_neighbors] = target_nodes[no_neighbors]
+            next_hop[agents_to_move] = sampled_neighbors
+
         outputs = {self.output_variables[0]: next_hop}
         return outputs
