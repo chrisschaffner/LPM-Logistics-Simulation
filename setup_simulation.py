@@ -40,11 +40,11 @@ def setup_movement_simulation():
 
     # Set simulation metadata - these are all required arguments
     metadata = {
-        "num_agents": 500000,
+        "num_agents": 100,
         "num_episodes": 5,
         "num_steps_per_episode": 150,
         "num_substeps_per_step": 1,
-        "num_nodes": 200,
+        "num_nodes": 50,
         "device": "cpu",
         "calibration": False,
     }
